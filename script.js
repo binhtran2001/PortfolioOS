@@ -29,7 +29,27 @@ class FileSystem {
                     type: 'file',
                     owner: 'guest',
                     permissions: { read: ['admin', 'guest'], write: ['admin', 'guest'] },
-                    content: '# Loading README...\n\nFetching the README.md from the server...'
+                    content: [
+                        '# PortfolioOS',
+                        '',
+                        'An interactive terminal-based portfolio website built with pure HTML, CSS & JavaScript.',
+                        '',
+                        '## Features',
+                        '',
+                        '- **Terminal UI**: Full emulator with command history and tab completion',
+                        '- **Filesystem**: Hierarchical directories with `mkdir`, `rm`, `cd`, `ls`',
+                        '- **Permissions**: User-based read/write access control',
+                        '- **User Accounts**: `login` command to switch users',
+                        '- **vi Editor**: Minimal editor with normal, insert, and command mode',
+                        '- **grep**: Search files and pipe output',
+                        '- **Markdown Rendering**: `view` command renders `.md` files',
+                        '- **Boot Sequence**: Realistic kernel boot simulation',
+                        '',
+                        '## Commands',
+                        '',
+                        'Type `help` to list all commands.',
+                        'Type `tips` for a beginner guide.',
+                    ].join('\n')
                 }
             };
             this.save(root);
