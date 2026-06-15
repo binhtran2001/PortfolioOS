@@ -212,7 +212,12 @@ let historyIndex = -1;
 let viMode = false;
 let viFile = null;
 let viBuffer = [''];
-let viNormalMode = true;    // true = normal, false = insert
+let viNormalMode = true;
+
+let multilineActive = false;
+let multilineDelimiter = '';
+let multilinePrefix = '';
+let multilineBuffer = '';
 
 const outputDiv = document.getElementById('output');
 const inputField = document.getElementById('command-input');
@@ -388,6 +393,10 @@ function renderMarkdown(md) {
 }
 
 function updatePrompt() {
+    if (multilineActive) {
+        promptSpan.textContent = '> ';
+        return;
+    }
     const displayPath = cwd === `/home/${currentUser}` ? '~' : cwd;
     promptSpan.textContent = `${currentUser}@portfolio:${displayPath}$ `;
 }
@@ -482,6 +491,17 @@ const commands = {
         '  ls | grep .txt              Filter directory listing',
         '  echo data > file.txt        Redirect output into a file',
         '',
+        '--- JAVASCRIPT ---',
+        '  js 1+1                   Evaluate JavaScript expression',
+        '  js console.log("hi")     Execute arbitrary JS code',
+        '  js << JSEOF              Multi-line JS via heredoc',
+        '  (then type code, then JSEOF on its own line)',
+        '',
+        '--- MULTILINE (HEREDOC) ---',
+        '  Use << DELIM to start a multiline input block.',
+        '  Type DELIM on its own line to end it.',
+        '  Example: cat << EOF  then lines  then EOF',
+        '',
         'Tip: Press Tab to autocomplete commands.',
         '     Press ArrowUp/Down to recall previous commands.',
     ].join('\n'),
@@ -501,7 +521,9 @@ const commands = {
         if (!args[0]) return 'Usage: cat <file>';
         const path = fs.resolvePath(args[0], cwd);
         const result = fs.readFile(path, currentUser);
-        return result.error ? result.error : result.content;
+        if (!result.error) return result.content;
+        // If file lookup fails, treat arg as inline content (pipe/heredoc)
+        return args[0];
     },
     view: (args) => {
         if (!args[0]) return 'Usage: view <file>';
@@ -512,6 +534,18 @@ const commands = {
         return '';
     },
     echo: (args) => args.join(' '),
+    js: (args) => {
+        const code = args.join(' ');
+        if (!code) return 'Usage: js <expression> or pipe/heredoc code to js';
+        try {
+            let result = eval(code);
+            if (result === undefined) return 'undefined';
+            if (result === null) return 'null';
+            return String(result);
+        } catch (e) {
+            return `Error: ${e.message}`;
+        }
+    },
     grep: (args) => {
         if (args.length < 1) return 'Usage: grep [-i] <pattern> [file]';
 
@@ -629,7 +663,7 @@ const commands = {
     }
 };
 
-function executeCommand(cmdLine) {
+function executeCommand(cmdLine, heredocInput) {
     try {
         let outputFile = null;
         if (cmdLine.includes('>')) {
@@ -639,7 +673,7 @@ function executeCommand(cmdLine) {
         }
 
         const pipeParts = cmdLine.split('|');
-        let pipeInput = null;
+        let pipeInput = heredocInput || null;
 
         for (let i = 0; i < pipeParts.length; i++) {
             const part = pipeParts[i].trim();
@@ -742,12 +776,44 @@ async function bootSequence() {
 
 inputField.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
+        if (multilineActive) {
+            const line = inputField.value;
+            inputField.value = '';
+            print(`> ${line}`);
+
+            if (line === multilineDelimiter) {
+                multilineActive = false;
+                updatePrompt();
+                commandHistory.push(`${multilinePrefix} << ${multilineDelimiter}`);
+                historyIndex = commandHistory.length;
+                const result = executeCommand(multilinePrefix, multilineBuffer.replace(/\n$/, ''));
+                if (result) print(result);
+            } else {
+                multilineBuffer += line + '\n';
+            }
+            inputField.focus();
+            return;
+        }
+
         const commandLine = inputField.value.trim();
         inputField.value = '';
 
         print(`${promptSpan.textContent}${commandLine}`);
 
         if (commandLine) {
+            const heredocMatch = commandLine.match(/<<\s*(\w+)/);
+            if (heredocMatch) {
+                const before = commandLine.slice(0, heredocMatch.index).trim();
+                const after = commandLine.slice(heredocMatch.index + heredocMatch[0].length).trim();
+                multilineActive = true;
+                multilineDelimiter = heredocMatch[1];
+                multilinePrefix = (before + ' ' + after).trim();
+                multilineBuffer = '';
+                updatePrompt();
+                inputField.focus();
+                return;
+            }
+
             commandHistory.push(commandLine);
             historyIndex = commandHistory.length;
             const result = executeCommand(commandLine);
