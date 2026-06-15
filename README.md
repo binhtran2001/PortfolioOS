@@ -43,7 +43,15 @@ Type "tips" for a beginner-friendly guide.
 | `pwd` | Print working directory |
 | `whoami` | Show current user |
 | `login <user>` | Switch user |
+| `js <file>` | Execute JavaScript file or piped/heredoc code |
 | `init_fs` | Reset filesystem to defaults |
+
+## Heredoc (Multiline Input)
+
+Use `<< DELIM` to enter multiline input mode. Text is captured until `DELIM` appears on a line by itself. Supports pipes and redirects:
+- `cat << EOF > file.txt` — write multiline text to a file
+- `js << CODE` — execute multiline JavaScript
+- `cat << EOF \| grep pattern` — filter multiline input through grep
 
 ## Project Structure
 
