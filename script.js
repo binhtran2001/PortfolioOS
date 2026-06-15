@@ -29,29 +29,7 @@ class FileSystem {
                     type: 'file',
                     owner: 'guest',
                     permissions: { read: ['admin', 'guest'], write: ['admin', 'guest'] },
-                    content: [
-                        '# Projects',
-                        '',
-                        '## Portfolio Terminal',
-                        'An interactive **terminal emulator** running entirely in the browser.',
-                        '',
-                        '### Features',
-                        '- `cat` with **Markdown** rendering support',
-                        '- Simulated filesystem with *permissions*',
-                        '- Pipe `|` and redirect `>` operators',
-                        '- Command history via `ArrowUp`/`ArrowDown`',
-                        '',
-                        '---',
-                        '',
-                        '> Built with *pure* HTML, CSS & JavaScript.',
-                        '',
-                        '```js',
-                        '// sample code block',
-                        'console.log("hello portfolio");',
-                        '```',
-                        '',
-                        '[Click here](https://github.com) to visit my GitHub.',
-                    ].join('\n')
+                    content: '# Loading README...\n\nFetching the README.md from the server...'
                 }
             };
             this.save(root);
@@ -722,6 +700,19 @@ async function bootSequence() {
             await new Promise(resolve => setTimeout(resolve, ms));
         }
     }
+
+    // Load real README.md content from disk into the filesystem
+    try {
+        const res = await fetch('README.md');
+        if (res.ok) {
+            const readme = await res.text();
+            const fsData = fs.getAll();
+            if (fsData['/home/guest/README.md']) {
+                fsData['/home/guest/README.md'].content = readme;
+                fs.save(fsData);
+            }
+        }
+    } catch (_) {}
 
     outputDiv.innerHTML = '';
     inputLine.style.display = 'flex';
