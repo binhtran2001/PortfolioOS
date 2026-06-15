@@ -1,6 +1,6 @@
 # PortfolioOS
 
-An interactive terminal-based portfolio website built with **pure HTML, CSS & JavaScript**. It simulates a Linux-like shell environment entirely in the browser using `localStorage` for persistence.
+An interactive terminal-based portfolio website built with **pure HTML, CSS & JavaScript**. It simulates a Linux-like shell environment entirely in the browser using **IndexedDB** for filesystem persistence.
 
 ## Features
 
