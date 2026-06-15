@@ -412,7 +412,7 @@ function expandGlob(pattern) {
     const suffix = pattern.slice(starIdx + 1);
 
     // Resolve the prefix directory
-    const dirPath = fs.resolvePath(prefix || '.', cwd);
+    const dirPath = fs.resolvePath(prefix.replace(/\/$/, '') || '.', cwd);
     const fsData = fs.getAll();
     const entry = fsData[dirPath];
     if (!entry || entry.type !== 'dir') return [fs.resolvePath(pattern, cwd)];
@@ -525,8 +525,8 @@ const commands = {
         const path = fs.resolvePath(args[0], cwd);
         const result = fs.readFile(path, currentUser);
         if (!result.error) return result.content;
-        // If file lookup fails, treat arg as inline content (pipe/heredoc)
-        return args[0];
+        if (pipeActive && args[0].includes('\n')) return args[0];
+        return result.error;
     },
     view: (args) => {
         if (!args[0]) return 'Usage: view <file>';
@@ -598,7 +598,12 @@ const commands = {
         }
 
         const flags = ignoreCase ? 'gi' : 'g';
-        const re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+        let re;
+        try {
+            re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+        } catch (e) {
+            return `grep: invalid pattern: ${e.message}`;
+        }
         const lines = content.split('\n');
         const matched = lines.filter(line => re.test(line));
         return matched.join('\n') || 'No matches';
@@ -678,8 +683,11 @@ const commands = {
     },
     login: (args) => {
         if (!args[0]) return 'Usage: login <username>';
+        const homePath = `/home/${args[0]}`;
+        const fsData = fs.getAll();
+        if (!fsData[homePath] || fsData[homePath].type !== 'dir') return `login: ${args[0]}: no home directory`;
         currentUser = args[0];
-        cwd = `/home/${currentUser}`;
+        cwd = homePath;
         updatePrompt();
         return `Logged in as ${currentUser}`;
     },
