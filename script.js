@@ -219,6 +219,8 @@ let multilineDelimiter = '';
 let multilinePrefix = '';
 let multilineBuffer = '';
 
+let pipeActive = false;
+
 const outputDiv = document.getElementById('output');
 const inputField = document.getElementById('command-input');
 const promptSpan = document.getElementById('prompt');
@@ -439,6 +441,7 @@ const commands = {
         '  pwd                – print current directory',
         '  whoami             – print current user',
         '  login <user>       – switch user',
+        '  js <file>          – execute JavaScript file or piped/heredoc code',
         '  init_fs            – initialize file system terminal data',
     ].join('\n'),
 
@@ -492,10 +495,10 @@ const commands = {
         '  echo data > file.txt        Redirect output into a file',
         '',
         '--- JAVASCRIPT ---',
-        '  js 1+1                   Evaluate JavaScript expression',
-        '  js console.log("hi")     Execute arbitrary JS code',
-        '  js << CODE               Multi-line JS via heredoc',
+        '  js script.js             Execute a .js file from the filesystem',
+        '  js << CODE               Execute multi-line JS via heredoc',
         '  (then type code, then CODE on its own line)',
+        '  cat file.js | js         Pipe JS code from another command',
         '',
         '--- MULTILINE (HEREDOC) ---',
         '  Use << DELIM to start a multiline input block.',
@@ -535,15 +538,39 @@ const commands = {
     },
     echo: (args) => args.join(' '),
     js: (args) => {
-        const code = args.join(' ');
-        if (!code) return 'Usage: js <expression> or pipe/heredoc code to js';
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        const lines = [];
+        const capture = (msgs) => msgs.map(m => typeof m === 'object' ? JSON.stringify(m, null, 2) : String(m)).join(' ');
+        console.log = (...msgs) => void lines.push(capture(msgs));
+        console.error = (...msgs) => void lines.push('Error: ' + capture(msgs));
+        console.warn = (...msgs) => void lines.push('Warning: ' + capture(msgs));
+        const restore = () => {
+            console.log = originalLog;
+            console.error = originalError;
+            console.warn = originalWarn;
+        };
+        let code;
+        if (args[0]) {
+            const path = fs.resolvePath(args[0], cwd);
+            const file = fs.readFile(path, currentUser);
+            if (!file.error) code = file.content;
+        }
+        if (!code && pipeActive) code = args.join(' ');
+        if (!code) { restore(); return 'Usage: js <file.js> or pipe/heredoc code to js'; }
         try {
             let result = eval(code);
-            if (result === undefined) return 'undefined';
-            if (result === null) return 'null';
-            return String(result);
+            restore();
+            const output = lines.join('\n');
+            if (result === undefined) return output || 'undefined';
+            if (result === null) return output || 'null';
+            const resultStr = String(result);
+            return output ? output + '\n' + resultStr : resultStr;
         } catch (e) {
-            return `Error: ${e.message}`;
+            restore();
+            lines.push(`Error: ${e.message}`);
+            return lines.join('\n');
         }
     },
     grep: (args) => {
@@ -687,7 +714,9 @@ function executeCommand(cmdLine, heredocInput) {
                 const effectiveArgs = (pipeInput !== null && cmdName !== 'echo')
                 ? [pipeInput, ...args]
                 : args;
+                pipeActive = true;
                 pipeInput = commands[cmdName](effectiveArgs);
+                pipeActive = false;
             } else {
                 pipeInput = `command not found: ${cmdName}`;
             }
