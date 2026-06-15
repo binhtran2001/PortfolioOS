@@ -1,0 +1,132 @@
+body {
+    background-color: #0c0c0c;
+    color: #00ff00;
+    font-family: 'Courier New', Courier, monospace;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+}
+
+#terminal {
+    width: 100%;
+    max-width: 900px;
+    height: 90vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+#output {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin-bottom: 10px;
+}
+
+#input-line {
+    display: flex;
+    align-items: center;
+}
+
+#vi-bar {
+    display: flex;
+    align-items: center;
+    border-top: 1px solid #333;
+    padding-top: 4px;
+    margin-top: 4px;
+}
+
+#vi-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+#vi-statusbar {
+    color: #aaa;
+    font-size: 0.85em;
+    padding: 2px 0;
+    border-bottom: 1px solid #333;
+    margin-bottom: 4px;
+}
+
+#vi-editor {
+    background: #0c0c0c;
+    color: #00ff00;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: inherit;
+    border: none;
+    outline: none;
+    resize: none;
+    flex: 1;
+    min-height: 200px;
+    padding: 4px 0;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    tab-size: 4;
+}
+
+#vi-editor::selection {
+    background: #00ff00;
+    color: #0c0c0c;
+}
+
+#vi-prompt {
+    white-space: nowrap;
+    margin-right: 8px;
+    color: #ffaa00;
+}
+
+#vi-input {
+    background: transparent;
+    border: none;
+    color: #ffaa00;
+    font-family: inherit;
+    font-size: inherit;
+    outline: none;
+    width: 100%;
+}
+
+#prompt {
+    white-space: nowrap;
+    margin-right: 10px;
+}
+
+#command-input {
+    background: transparent;
+    border: none;
+    color: #00ff00;
+    font-family: inherit;
+    font-size: inherit;
+    outline: none;
+    width: 100%;
+}
+
+.boot-msg {
+    color: #aaa;
+    font-size: 0.9em;
+}
+
+.error {
+    color: #ff5555;
+}
+
+.dir {
+    color: #5555ff;
+}
+
+/* Markdown rendering */
+.md-h1 { color: #00ff00; font-weight: bold; font-size: 1.3em; margin: 10px 0 4px; }
+.md-h2 { color: #00cc00; font-weight: bold; font-size: 1.15em; margin: 8px 0 3px; }
+.md-h3 { color: #009900; font-weight: bold; margin: 6px 0 2px; }
+.md-bold { color: #00ff00; font-weight: bold; }
+.md-italic { color: #88ff88; font-style: italic; }
+.md-inline-code { background: #1a1a1a; color: #ffaa00; padding: 0 4px; border-radius: 2px; font-family: inherit; }
+.md-code-block { background: #1a1a1a; color: #ffaa00; padding: 8px 12px; margin: 4px 0; white-space: pre-wrap; border-left: 3px solid #ffaa00; }
+.md-link { color: #5555ff; text-decoration: underline; cursor: pointer; }
+.md-link:hover { color: #7777ff; }
+.md-list-item { margin-left: 16px; color: #00ff00; }
+.md-hr { border: none; border-top: 1px dashed #444; margin: 10px 0; }
