@@ -1,12 +1,72 @@
+const idb = {
+    db: null,
+    async open() {
+        if (this.db) return this.db;
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('PortfolioOS', 1);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('fs')) {
+                    db.createObjectStore('fs', { keyPath: 'key' });
+                }
+            };
+            req.onsuccess = (e) => { this.db = e.target.result; resolve(this.db); };
+            req.onerror = () => reject(req.error);
+        });
+    },
+    async get(key) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('fs', 'readonly');
+            const req = tx.objectStore('fs').get(key);
+            req.onsuccess = () => resolve(req.result ? req.result.value : undefined);
+            req.onerror = () => reject(req.error);
+        });
+    },
+    async set(key, value) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('fs', 'readwrite');
+            tx.objectStore('fs').put({ key, value });
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    },
+    async remove(key) {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('fs', 'readwrite');
+            tx.objectStore('fs').delete(key);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    },
+    async clear() {
+        const db = await this.open();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('fs', 'readwrite');
+            tx.objectStore('fs').clear();
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+};
+
 class FileSystem {
     constructor() {
         this.storageKey = 'portfolio_fs';
-        this.init();
     }
 
-    init() {
-        if (!localStorage.getItem(this.storageKey)) {
-            const root = {
+    async init() {
+        const existing = await idb.get('fsData');
+        if (existing) return;
+        const lsData = localStorage.getItem(this.storageKey);
+        if (lsData) {
+            await idb.set('fsData', JSON.parse(lsData));
+            localStorage.removeItem(this.storageKey);
+            return;
+        }
+        const root = {
                 '/': {
                     type: 'dir',
                     owner: 'admin',
@@ -52,44 +112,28 @@ class FileSystem {
                     ].join('\n')
                 }
             };
-            this.save(root);
-        }
+            await idb.set('fsData', root);
     }
 
-    getAll() {
-        return JSON.parse(localStorage.getItem(this.storageKey) || '{}');
-    }
-
-    save(fsData) {
-        localStorage.setItem(this.storageKey, JSON.stringify(fsData));
-    }
+    async getAll() { return (await idb.get('fsData')) || {}; }
+    async save(fsData) { await idb.set('fsData', fsData); }
 
     resolvePath(path, cwd) {
         if (!path) return cwd;
-
         let absolute;
-        if (path.startsWith('/')) {
-            absolute = path;
-        } else {
-            const base = cwd === '/' ? '' : cwd;
-            absolute = base + '/' + path;
-        }
-
+        if (path.startsWith('/')) { absolute = path; }
+        else { const base = cwd === '/' ? '' : cwd; absolute = base + '/' + path; }
         const parts = absolute.split('/').filter(Boolean);
         const resolved = [];
         for (const part of parts) {
-            if (part === '..') {
-                resolved.pop();
-            } else if (part !== '.') {
-                resolved.push(part);
-            }
+            if (part === '..') { resolved.pop(); }
+            else if (part !== '.') { resolved.push(part); }
         }
-
         return '/' + resolved.join('/');
     }
 
-    hasPermission(user, path, type) {
-        const fsData = this.getAll();
+    async hasPermission(user, path, type) {
+        const fsData = await this.getAll();
         const entry = fsData[path];
         if (!entry) return false;
         if (user === 'admin') return true;
@@ -97,23 +141,22 @@ class FileSystem {
         return entry.permissions && entry.permissions[type] && entry.permissions[type].includes(user);
     }
 
-    readFile(path, user) {
-        if (!this.hasPermission(user, path, 'read')) return { error: 'Permission denied' };
-        const fsData = this.getAll();
+    async readFile(path, user) {
+        if (!(await this.hasPermission(user, path, 'read'))) return { error: 'Permission denied' };
+        const fsData = await this.getAll();
         const entry = fsData[path];
         if (!entry || entry.type !== 'file') return { error: 'No such file' };
         return { content: entry.content };
     }
 
-    writeFile(path, content, user) {
-        const fsData = this.getAll();
+    async writeFile(path, content, user) {
+        const fsData = await this.getAll();
         const fileExists = !!fsData[path];
-
         if (fileExists) {
-            if (!this.hasPermission(user, path, 'write')) return { error: 'Permission denied' };
+            if (!(await this.hasPermission(user, path, 'write'))) return { error: 'Permission denied' };
         } else {
             const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-            if (!this.hasPermission(user, parentPath, 'write')) return { error: 'Permission denied' };
+            if (!(await this.hasPermission(user, parentPath, 'write'))) return { error: 'Permission denied' };
             if (fsData[parentPath] && fsData[parentPath].type === 'dir') {
                 const name = path.split('/').pop();
                 if (!fsData[parentPath].children.includes(name)) {
@@ -121,50 +164,43 @@ class FileSystem {
                 }
             }
         }
-
         fsData[path] = {
             type: 'file',
             content,
             owner: fileExists ? fsData[path].owner : user,
             permissions: fileExists ? fsData[path].permissions : { read: [user, 'admin'], write: [user, 'admin'] }
         };
-        this.save(fsData);
+        await this.save(fsData);
         return { success: true };
     }
 
-    mkdir(path, user) {
-        const fsData = this.getAll();
+    async mkdir(path, user) {
+        const fsData = await this.getAll();
         if (fsData[path]) return { error: 'Directory already exists' };
-
         const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-        if (!this.hasPermission(user, parentPath, 'write')) return { error: 'Permission denied' };
-
+        if (!(await this.hasPermission(user, parentPath, 'write'))) return { error: 'Permission denied' };
         fsData[path] = {
             type: 'dir',
             owner: user,
             permissions: { read: [user, 'admin'], write: [user, 'admin'] },
             children: []
         };
-
         const name = path.split('/').pop();
         if (fsData[parentPath] && fsData[parentPath].type === 'dir') {
             if (!fsData[parentPath].children.includes(name)) {
                 fsData[parentPath].children.push(name);
             }
         }
-
-        this.save(fsData);
+        await this.save(fsData);
         return { success: true };
     }
 
-    rm(path, user, recursive) {
+    async rm(path, user, recursive) {
         if (path === '/') return { error: 'Cannot remove root' };
-        const fsData = this.getAll();
+        const fsData = await this.getAll();
         if (!fsData[path]) return { error: `rm: ${path}: No such file or directory` };
-
         const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-        if (!this.hasPermission(user, parentPath, 'write')) return { error: 'Permission denied' };
-
+        if (!(await this.hasPermission(user, parentPath, 'write'))) return { error: 'Permission denied' };
         if (fsData[path].type === 'dir') {
             const children = fsData[path].children || [];
             if (children.length > 0 && !recursive) {
@@ -175,35 +211,32 @@ class FileSystem {
                 if (key.startsWith(prefix)) delete fsData[key];
             });
         }
-
         delete fsData[path];
         const name = path.split('/').pop();
         if (fsData[parentPath] && fsData[parentPath].type === 'dir') {
             fsData[parentPath].children = fsData[parentPath].children.filter(c => c !== name);
         }
-
-        this.save(fsData);
+        await this.save(fsData);
         return { success: true };
     }
 
-    list(path, user) {
-        if (!this.hasPermission(user, path, 'read')) return { error: 'Permission denied' };
-        const fsData = this.getAll();
+    async list(path, user) {
+        if (!(await this.hasPermission(user, path, 'read'))) return { error: 'Permission denied' };
+        const fsData = await this.getAll();
         const entry = fsData[path];
         if (!entry || entry.type !== 'dir') return { error: 'Not a directory' };
-
         const prefix = path === '/' ? '/' : path + '/';
         const labeled = entry.children.map(name => {
             const childPath = prefix + name;
             const child = fsData[childPath];
             return child && child.type === 'dir' ? name + '/' : name;
         });
-
         return { content: labeled.join('  ') };
     }
 }
 
 const fs = new FileSystem();
+(async () => { await fs.init(); bootSequence(); })();
 let currentUser = 'guest';
 let cwd = '/home/guest';
 let commandHistory = [];
@@ -288,9 +321,9 @@ function viLeaveInsertMode() {
     viUpdateStatusbar();
 }
 
-function writeViBuffer() {
+async function writeViBuffer() {
     const content = viBuffer.join('\n');
-    const result = fs.writeFile(viFile, content, currentUser);
+    const result = await fs.writeFile(viFile, content, currentUser);
     if (result.error) {
         print(result.error);
     } else {
@@ -298,13 +331,13 @@ function writeViBuffer() {
     }
 }
 
-function processViCommand(cmd) {
+async function processViCommand(cmd) {
     if (cmd === 'q' || cmd === 'q!') {
         exitViMode();
         return;
     }
     if (cmd === 'w' || cmd === 'w!') {
-        writeViBuffer();
+        await writeViBuffer();
         viNormalMode = true;
         viEditor.readOnly = true;
         viBar.style.display = 'none';
@@ -313,7 +346,7 @@ function processViCommand(cmd) {
         return;
     }
     if (cmd === 'wq' || cmd === 'wq!') {
-        writeViBuffer();
+        await writeViBuffer();
         exitViMode();
         return;
     }
@@ -403,7 +436,7 @@ function updatePrompt() {
     promptSpan.textContent = `${currentUser}@portfolio:${displayPath}$ `;
 }
 
-function expandGlob(pattern) {
+async function expandGlob(pattern) {
     // Only support simple glob with one *: prefix*suffix
     const starIdx = pattern.indexOf('*');
     if (starIdx === -1) return [fs.resolvePath(pattern, cwd)];
@@ -413,7 +446,7 @@ function expandGlob(pattern) {
 
     // Resolve the prefix directory
     const dirPath = fs.resolvePath(prefix.replace(/\/$/, '') || '.', cwd);
-    const fsData = fs.getAll();
+            const fsData = await fs.getAll();
     const entry = fsData[dirPath];
     if (!entry || entry.type !== 'dir') return [fs.resolvePath(pattern, cwd)];
 
@@ -515,29 +548,29 @@ const commands = {
     },
     whoami: () => currentUser,
     pwd: () => cwd,
-    ls: (args) => {
+    ls: async (args) => {
         const path = args[0] ? fs.resolvePath(args[0], cwd) : cwd;
-        const result = fs.list(path, currentUser);
+        const result = await fs.list(path, currentUser);
         return result.error ? result.error : (result.content || '');
     },
-    cat: (args) => {
+    cat: async (args) => {
         if (!args[0]) return 'Usage: cat <file>';
         const path = fs.resolvePath(args[0], cwd);
-        const result = fs.readFile(path, currentUser);
+        const result = await fs.readFile(path, currentUser);
         if (!result.error) return result.content;
         if (pipeActive && args[0].includes('\n')) return args[0];
         return result.error;
     },
-    view: (args) => {
+    view: async (args) => {
         if (!args[0]) return 'Usage: view <file>';
         const path = fs.resolvePath(args[0], cwd);
-        const result = fs.readFile(path, currentUser);
+        const result = await fs.readFile(path, currentUser);
         if (result.error) return result.error;
         printHTML(renderMarkdown(result.content));
         return '';
     },
     echo: (args) => args.join(' '),
-    js: (args) => {
+    js: async (args) => {
         const originalLog = console.log;
         const originalError = console.error;
         const originalWarn = console.warn;
@@ -554,7 +587,7 @@ const commands = {
         let code;
         if (args[0]) {
             const path = fs.resolvePath(args[0], cwd);
-            const file = fs.readFile(path, currentUser);
+            const file = await fs.readFile(path, currentUser);
             if (!file.error) code = file.content;
         }
         if (!code && pipeActive) code = args.join(' ');
@@ -573,7 +606,7 @@ const commands = {
             return lines.join('\n');
         }
     },
-    grep: (args) => {
+    grep: async (args) => {
         if (args.length < 1) return 'Usage: grep [-i] <pattern> [file]';
 
         const ignoreCase = args.includes('-i');
@@ -592,7 +625,7 @@ const commands = {
             pattern = filteredArgs[0];
             if (!filteredArgs[1]) return 'Usage: grep [-i] <pattern> <file>';
             const path = fs.resolvePath(filteredArgs[1], cwd);
-            const result = fs.readFile(path, currentUser);
+            const result = await fs.readFile(path, currentUser);
             if (result.error) return result.error;
             content = result.content;
         }
@@ -608,38 +641,38 @@ const commands = {
         const matched = lines.filter(line => re.test(line));
         return matched.join('\n') || 'No matches';
     },
-    mkdir: (args) => {
+    mkdir: async (args) => {
         if (!args[0]) return 'Usage: mkdir <directory>';
         const path = fs.resolvePath(args[0], cwd);
-        const result = fs.mkdir(path, currentUser);
+        const result = await fs.mkdir(path, currentUser);
         return result.error ? result.error : `mkdir: created directory '${args[0]}'`;
     },
-    touch: (args) => {
+    touch: async (args) => {
         if (!args[0]) return 'Usage: touch <file>';
         const path = fs.resolvePath(args[0], cwd);
-        const existing = fs.readFile(path, currentUser);
+        const existing = await fs.readFile(path, currentUser);
         if (!existing.error) return '';
         const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-        if (!fs.hasPermission(currentUser, parentPath, 'write')) return 'Permission denied';
-        fs.writeFile(path, '', currentUser);
-        return '';
+        if (!(await fs.hasPermission(currentUser, parentPath, 'write'))) return 'Permission denied';
+        const result = await fs.writeFile(path, '', currentUser);
+        return result.error || '';
     },
-    vi: (args) => {
+    vi: async (args) => {
         if (!args[0]) return 'Usage: vi <file>';
         const path = fs.resolvePath(args[0], cwd);
-        const data = fs.getAll();
+        const data = await fs.getAll();
         const entry = data[path];
 
         if (entry && entry.type === 'dir') return 'E495: Can\'t edit a directory';
-        if (entry && !fs.hasPermission(currentUser, path, 'read')) return 'Permission denied';
+        if (entry && !(await fs.hasPermission(currentUser, path, 'read'))) return 'Permission denied';
 
         if (entry) {
-            const r = fs.readFile(path, currentUser);
+            const r = await fs.readFile(path, currentUser);
             viBuffer = r.error ? [''] : r.content.split('\n');
             if (viBuffer.length === 0) viBuffer = [''];
         } else {
             const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
-            if (!fs.hasPermission(currentUser, parentPath, 'write')) return 'Permission denied';
+            if (!(await fs.hasPermission(currentUser, parentPath, 'write'))) return 'Permission denied';
             viBuffer = [''];
         }
 
@@ -657,48 +690,45 @@ const commands = {
         viEditor.focus();
         return '';
     },
-    rm: (args) => {
+    rm: async (args) => {
         if (!args[0]) return 'Usage: rm [-r] <path>';
         const recursive = args.includes('-r');
         const paths = args.filter(a => !a.startsWith('-'));
         if (!paths[0]) return 'Usage: rm [-r] <path>';
 
-        const expanded = paths.flatMap(p => expandGlob(p));
-        const results = expanded.map(path => {
-            const result = fs.rm(path, currentUser, recursive);
-            return result.error ? result.error : '';
-        });
-        return results.filter(r => r).join('\n');
+        const expanded = (await Promise.all(paths.map(p => expandGlob(p)))).flat();
+        const results = await Promise.all(expanded.map(path => fs.rm(path, currentUser, recursive)));
+        return results.map(r => r.error || '').filter(r => r).join('\n');
     },
-    cd: (args) => {
+    cd: async (args) => {
         const target = args[0] || `/home/${currentUser}`;
         const path = fs.resolvePath(target, cwd);
-        const fsData = fs.getAll();
+        const fsData = await fs.getAll();
         if (!fsData[path]) return `cd: ${target}: No such file or directory`;
         if (fsData[path].type !== 'dir') return `cd: ${target}: Not a directory`;
-        if (!fs.hasPermission(currentUser, path, 'read')) return `cd: ${target}: Permission denied`;
+        if (!(await fs.hasPermission(currentUser, path, 'read'))) return `cd: ${target}: Permission denied`;
         cwd = path;
         updatePrompt();
         return '';
     },
-    login: (args) => {
+    login: async (args) => {
         if (!args[0]) return 'Usage: login <username>';
         const homePath = `/home/${args[0]}`;
-        const fsData = fs.getAll();
+        const fsData = await fs.getAll();
         if (!fsData[homePath] || fsData[homePath].type !== 'dir') return `login: ${args[0]}: no home directory`;
         currentUser = args[0];
         cwd = homePath;
         updatePrompt();
         return `Logged in as ${currentUser}`;
     },
-    init_fs: (args) => {
-        localStorage.clear();
-        fs.init();
+    init_fs: async (args) => {
+        await idb.clear();
+        await fs.init();
         return 'File system reinitialized.';
     }
 };
 
-function executeCommand(cmdLine, heredocInput) {
+async function executeCommand(cmdLine, heredocInput) {
     try {
         let outputFile = null;
         if (cmdLine.includes('>')) {
@@ -719,11 +749,12 @@ function executeCommand(cmdLine, heredocInput) {
             if (!cmdName) { pipeInput = ''; continue; }
 
             if (commands[cmdName]) {
-                const effectiveArgs = (pipeInput !== null && cmdName !== 'echo')
+                const hasPipe = pipeInput !== null;
+                const effectiveArgs = (hasPipe && cmdName !== 'echo')
                 ? [pipeInput, ...args]
                 : args;
-                pipeActive = true;
-                pipeInput = commands[cmdName](effectiveArgs);
+                if (hasPipe) pipeActive = true;
+                pipeInput = await commands[cmdName](effectiveArgs);
                 pipeActive = false;
             } else {
                 pipeInput = `command not found: ${cmdName}`;
@@ -734,7 +765,7 @@ function executeCommand(cmdLine, heredocInput) {
 
         if (outputFile) {
             const path = fs.resolvePath(outputFile, cwd);
-            const result = fs.writeFile(path, lastResult ?? '', currentUser);
+            const result = await fs.writeFile(path, lastResult ?? '', currentUser);
             return result.error ? result.error : '';
         }
 
@@ -797,10 +828,10 @@ async function bootSequence() {
         const res = await fetch('README.md');
         if (res.ok) {
             const readme = await res.text();
-            const fsData = fs.getAll();
+    const fsData = await fs.getAll();
             if (fsData['/home/guest/README.md']) {
                 fsData['/home/guest/README.md'].content = readme;
-                fs.save(fsData);
+                await fs.save(fsData);
             }
         }
     } catch (_) {}
@@ -811,7 +842,7 @@ async function bootSequence() {
     inputField.focus();
 }
 
-inputField.addEventListener('keydown', (e) => {
+inputField.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter') {
         if (multilineActive) {
             const line = inputField.value;
@@ -823,7 +854,7 @@ inputField.addEventListener('keydown', (e) => {
                 updatePrompt();
                 commandHistory.push(`${multilinePrefix} << ${multilineDelimiter}`);
                 historyIndex = commandHistory.length;
-                const result = executeCommand(multilinePrefix, multilineBuffer.replace(/\n$/, ''));
+                const result = await executeCommand(multilinePrefix, multilineBuffer.replace(/\n$/, ''));
                 if (result) print(result);
             } else {
                 multilineBuffer += line + '\n';
@@ -853,7 +884,7 @@ inputField.addEventListener('keydown', (e) => {
 
             commandHistory.push(commandLine);
             historyIndex = commandHistory.length;
-            const result = executeCommand(commandLine);
+            const result = await executeCommand(commandLine);
             if (result) print(result);
         }
     } else if (e.key === 'ArrowUp') {
@@ -888,11 +919,11 @@ inputField.addEventListener('keydown', (e) => {
     }
 });
 
-viInput.addEventListener('keydown', (e) => {
+viInput.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter') {
         const cmd = viInput.value.trim();
         viInput.value = '';
-        if (cmd) processViCommand(cmd);
+        if (cmd) await processViCommand(cmd);
         e.preventDefault();
     } else if (e.key === 'Escape') {
         viNormalMode = true;
@@ -985,5 +1016,3 @@ viEditor.addEventListener('input', () => {
         viUpdateStatusbar();
     }
 });
-
-bootSequence();
