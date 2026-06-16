@@ -110,9 +110,35 @@ class FileSystem {
                         'Type `help` to list all commands.',
                         'Type `tips` for a beginner guide.',
                     ].join('\n')
+                },
+                '/var': {
+                    type: 'dir',
+                    owner: 'admin',
+                    permissions: { read: ['admin', 'guest'], write: ['admin'] },
+                    children: ['private']
+                },
+                '/var/private': {
+                    type: 'dir',
+                    owner: 'admin',
+                    permissions: { read: ['admin', 'guest'], write: ['admin'] },
+                    children: ['admin.txt']
+                },
+                '/var/private/admin.txt': {
+                    type: 'file',
+                    owner: 'admin',
+                    permissions: { read: ['admin', 'guest'], write: ['admin'] },
+                    content: 'admin'
+                },
+                '/root': {
+                    type: 'dir',
+                    owner: 'admin',
+                    permissions: { read: ['admin'], write: ['admin'] },
+                    children: []
                 }
             };
             await idb.set('fsData', root);
+            const pws = await idb.get('passwords');
+            if (!pws) await idb.set('passwords', { admin: 'admin' });
     }
 
     async getAll() { return (await idb.get('fsData')) || {}; }
@@ -253,6 +279,13 @@ let multilinePrefix = '';
 let multilineBuffer = '';
 
 let pipeActive = false;
+
+let promptActive = false;
+let promptTargetUser = null;
+
+function getHome(user) {
+    return user === 'admin' ? '/root' : `/home/${user}`;
+}
 
 const outputDiv = document.getElementById('output');
 const inputField = document.getElementById('command-input');
@@ -432,8 +465,13 @@ function updatePrompt() {
         promptSpan.textContent = '> ';
         return;
     }
-    const displayPath = cwd === `/home/${currentUser}` ? '~' : cwd;
-    promptSpan.textContent = `${currentUser}@portfolio:${displayPath}$ `;
+    if (promptActive) {
+        promptSpan.textContent = '';
+        return;
+    }
+    const displayPath = cwd === getHome(currentUser) ? '~' : cwd;
+    const suffix = currentUser === 'admin' ? '#' : '$';
+    promptSpan.textContent = `${currentUser}@portfolio:${displayPath}${suffix} `;
 }
 
 async function expandGlob(pattern) {
@@ -475,7 +513,10 @@ const commands = {
         '  whoami             – print current user',
         '  login <user>       – switch user',
         '  js <file>          – execute JavaScript file or piped/heredoc code',
-        '  init_fs            – initialize file system terminal data',
+        '  passwd [old] <new>  – set or change your password',
+        '  exit                – log out',
+        '  logout              – log out',
+        '  init_fs            – reset everything to factory defaults',
     ].join('\n'),
 
     tips: () => [
@@ -511,8 +552,13 @@ const commands = {
         '',
         '--- USER ACCOUNTS ---',
         '  whoami                 See your current username',
+        '  passwd <new>           Set or change your password',
         '  login admin            Switch to admin (has full permissions)',
         '  login guest            Switch back to guest',
+        '  exit                  Log out',
+        '  logout                Log out',
+        '',
+        '  Note: If the user has a password, login will prompt for it.',
         '',
         '--- CREATING & DELETING ---',
         '  touch file.txt          Create an empty file',
@@ -701,7 +747,7 @@ const commands = {
         return results.map(r => r.error || '').filter(r => r).join('\n');
     },
     cd: async (args) => {
-        const target = args[0] || `/home/${currentUser}`;
+        const target = args[0] || getHome(currentUser);
         const path = fs.resolvePath(target, cwd);
         const fsData = await fs.getAll();
         if (!fsData[path]) return `cd: ${target}: No such file or directory`;
@@ -713,14 +759,46 @@ const commands = {
     },
     login: async (args) => {
         if (!args[0]) return 'Usage: login <username>';
-        const homePath = `/home/${args[0]}`;
+        const homePath = getHome(args[0]);
         const fsData = await fs.getAll();
         if (!fsData[homePath] || fsData[homePath].type !== 'dir') return `login: ${args[0]}: no home directory`;
+        const pws = (await idb.get('passwords')) || {};
+        if (pws[args[0]] && args.length < 2) {
+            promptActive = true;
+            promptTargetUser = args[0];
+            updatePrompt();
+            return 'Password: ';
+        }
+        if (pws[args[0]] && pws[args[0]] !== args[1]) return 'login: incorrect password';
         currentUser = args[0];
         cwd = homePath;
         updatePrompt();
         return `Logged in as ${currentUser}`;
     },
+    passwd: async (args) => {
+        const pws = (await idb.get('passwords')) || {};
+        if (!args[0]) return 'Usage: passwd [old_password] <new_password>';
+        if (pws[currentUser]) {
+            if (!args[1]) return 'passwd: enter current password as first argument';
+            if (pws[currentUser] !== args[0]) return 'passwd: incorrect current password';
+            pws[currentUser] = args[1];
+        } else {
+            pws[currentUser] = args[0];
+        }
+        await idb.set('passwords', pws);
+        return 'passwd: password updated';
+    },
+    exit: async () => {
+        if (currentUser === 'guest') {
+            printHTML('<iframe width="560" height="315" src="https://www.youtube.com/embed/dQw4w9WgXcQ?si=jwPuQjY6Kocypoln" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>');
+            return '';
+        }
+        currentUser = 'guest';
+        cwd = '/home/guest';
+        updatePrompt();
+        return 'logout';
+    },
+    logout: async () => commands.exit(),
     init_fs: async (args) => {
         await idb.clear();
         await fs.init();
@@ -844,6 +922,27 @@ async function bootSequence() {
 
 inputField.addEventListener('keydown', async (e) => {
     if (e.key === 'Enter') {
+        if (promptActive) {
+            const password = inputField.value;
+            inputField.value = '';
+            print('*'.repeat(password.length));
+            const user = promptTargetUser;
+            promptActive = false;
+            promptTargetUser = null;
+            const pws = (await idb.get('passwords')) || {};
+            if (pws[user] && pws[user] === password) {
+                currentUser = user;
+                cwd = getHome(user);
+                updatePrompt();
+                print(`Logged in as ${currentUser}`);
+            } else {
+                updatePrompt();
+                print('login: incorrect password');
+            }
+            inputField.focus();
+            return;
+        }
+
         if (multilineActive) {
             const line = inputField.value;
             inputField.value = '';
@@ -904,6 +1003,13 @@ inputField.addEventListener('keydown', async (e) => {
             inputField.value = '';
         }
         e.preventDefault();
+    } else if (e.key === 'd' && e.ctrlKey) {
+        e.preventDefault();
+        if (!viMode) {
+            inputField.value = '';
+            const result = await commands.exit();
+            if (result) print(`${promptSpan.textContent}logout`);
+        }
     } else if (e.key === 'Tab') {
         if (viMode) { e.preventDefault(); return; }
         e.preventDefault();
